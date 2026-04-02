@@ -7,7 +7,7 @@ const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000';
 
 // ── REST helpers ─────────────────────────────────────────────────────────────
 
-async function callApi(endpoint: string, method: string = 'GET', body?: any) {
+async function callApi(endpoint: string, method: string = 'GET', body?: unknown) {
   const res = await fetch(`${API_BASE}${endpoint}`, {
     method,
     headers: { 'Content-Type': 'application/json' },
@@ -16,7 +16,7 @@ async function callApi(endpoint: string, method: string = 'GET', body?: any) {
   
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(err.error || `HTTP ${res.status}`);
+    throw new Error((err as Record<string, unknown>).error as string || `HTTP ${res.status}`);
   }
   
   if (res.headers.get('content-type')?.includes('text/csv')) {
@@ -30,9 +30,9 @@ export async function createJob(
   title: string,
   description: string,
   keywords: string,
-  file: File,
+  _file: File,
 ): Promise<{ jobId: string }> {
-  return callApi('/create_job', 'POST', { title, description, keywords });
+  return callApi('/create_job', 'POST', { title, description, keywords }) as Promise<{ jobId: string }>;
 }
 
 export async function shortlistCandidate(jobId: string, candidateId: string): Promise<void> {
@@ -60,9 +60,9 @@ export function subscribeJob(
   const poll = async () => {
     try {
       const data = await callApi(`/get_job?jobId=${jobId}`);
-      if (!callbackCalled) callback({ jobId, ...data });
-    } catch (e) {
-      console.error('Error fetching job:', e);
+      if (!callbackCalled) callback({ jobId, ...data as Record<string, unknown> });
+    } catch {
+      console.error('Error fetching job:');
     }
   };
 
@@ -76,29 +76,29 @@ export function subscribeJob(
 }
 
 export function subscribeLeaderboard(
-  jobId: string,
-  callback: (candidates: Record<string, unknown>[]) => void,
+  _jobId: string,
+  _callback: (candidates: Record<string, unknown>[]) => void,
 ): Unsubscribe {
   return () => {};
 }
 
 export function subscribeInProgress(
-  jobId: string,
-  callback: (candidates: Record<string, unknown>[]) => void,
+  _jobId: string,
+  _callback: (candidates: Record<string, unknown>[]) => void,
 ): Unsubscribe {
   return () => {};
 }
 
 export function subscribeIssues(
-  jobId: string,
-  callback: (candidates: Record<string, unknown>[]) => void,
+  _jobId: string,
+  _callback: (candidates: Record<string, unknown>[]) => void,
 ): Unsubscribe {
   return () => {};
 }
 
 export function subscribeEventFeed(
-  jobId: string,
-  callback: (events: Record<string, unknown>[]) => void,
+  _jobId: string,
+  _callback: (events: Record<string, unknown>[]) => void,
 ): Unsubscribe {
   return () => {};
 }
