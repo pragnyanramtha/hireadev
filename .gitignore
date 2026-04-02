@@ -48,6 +48,7 @@ serviceAccountKey.json
 
 # Agent data
 .agent/
+.ruff_cache
 *.csv
 
 # Misc
