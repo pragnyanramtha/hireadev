@@ -4,6 +4,7 @@
  */
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000';
+const POLL_INTERVAL_MS = 1000;
 
 // ── REST helpers ─────────────────────────────────────────────────────────────
 
@@ -16,7 +17,11 @@ async function callApi(endpoint: string, method: string = 'GET', body?: unknown)
   
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error((err as Record<string, unknown>).error as string || `HTTP ${res.status}`);
+    throw new Error(
+      (err as Record<string, unknown>).error as string
+      || (err as Record<string, unknown>).detail as string
+      || `HTTP ${res.status}`,
+    );
   }
   
   if (res.headers.get('content-type')?.includes('text/csv')) {
@@ -26,13 +31,86 @@ async function callApi(endpoint: string, method: string = 'GET', body?: unknown)
   return res.json();
 }
 
+function readFileAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.onerror = () => reject(new Error('Unable to read selected ZIP file.'));
+    reader.onload = () => {
+      if (typeof reader.result !== 'string') {
+        reject(new Error('Unexpected upload payload.'));
+        return;
+      }
+
+      const [, base64 = ''] = reader.result.split(',', 2);
+      resolve(base64);
+    };
+
+    reader.readAsDataURL(file);
+  });
+}
+
+function subscribeList<T>(
+  endpoint: string,
+  callback: (data: T) => void,
+): Unsubscribe {
+  let callbackCalled = false;
+
+  const poll = async () => {
+    try {
+      const data = await callApi(endpoint);
+      if (!callbackCalled) callback(data as T);
+    } catch (error) {
+      console.error(`Error fetching ${endpoint}:`, error);
+    }
+  };
+
+  poll();
+  const interval = setInterval(poll, POLL_INTERVAL_MS);
+
+  return () => {
+    callbackCalled = true;
+    clearInterval(interval);
+  };
+}
+
 export async function createJob(
   title: string,
   description: string,
   keywords: string,
-  _file: File,
+  file: File,
 ): Promise<{ jobId: string }> {
-  return callApi('/create_job', 'POST', { title, description, keywords }) as Promise<{ jobId: string }>;
+  const zipBase64 = await readFileAsBase64(file);
+
+  return callApi('/create_job', 'POST', {
+    title,
+    description,
+    keywords,
+    zipFilename: file.name,
+    zipBase64,
+  }) as Promise<{ jobId: string }>;
+}
+
+export async function appendResumes(jobId: string, file: File): Promise<{ status: string; added: number }> {
+  const zipBase64 = await readFileAsBase64(file);
+
+  return callApi('/append_resumes', 'POST', {
+    jobId,
+    zipFilename: file.name,
+    zipBase64,
+  }) as Promise<{ status: string; added: number }>;
+}
+
+export async function listJobs(): Promise<Record<string, unknown>[]> {
+  return callApi('/list_jobs') as Promise<Record<string, unknown>[]>;
+}
+
+export async function getDeepResearch(jobId: string): Promise<Record<string, unknown>> {
+  return callApi(`/get_deep_research?jobId=${jobId}`) as Promise<Record<string, unknown>>;
+}
+
+export async function runDeepResearch(jobId: string): Promise<Record<string, unknown>> {
+  return callApi('/run_deep_research', 'POST', { jobId }) as Promise<Record<string, unknown>>;
 }
 
 export async function shortlistCandidate(jobId: string, candidateId: string): Promise<void> {
@@ -55,50 +133,58 @@ export function subscribeJob(
   jobId: string,
   callback: (data: Record<string, unknown>) => void,
 ): Unsubscribe {
-  let callbackCalled = false;
-  
-  const poll = async () => {
-    try {
-      const data = await callApi(`/get_job?jobId=${jobId}`);
-      if (!callbackCalled) callback({ jobId, ...data as Record<string, unknown> });
-    } catch {
-      console.error('Error fetching job:');
-    }
-  };
-
-  poll();
-  const interval = setInterval(poll, 3000);
-
-  return () => {
-    callbackCalled = true;
-    clearInterval(interval);
-  };
+  return subscribeList<Record<string, unknown>>(
+    `/get_job?jobId=${jobId}`,
+    (data) => callback({ jobId, ...data }),
+  );
 }
 
 export function subscribeLeaderboard(
-  _jobId: string,
-  _callback: (candidates: Record<string, unknown>[]) => void,
+  jobId: string,
+  callback: (candidates: Record<string, unknown>[]) => void,
 ): Unsubscribe {
-  return () => {};
+  return subscribeList<Record<string, unknown>[]>(
+    `/get_leaderboard?jobId=${jobId}`,
+    callback,
+  );
 }
 
 export function subscribeInProgress(
-  _jobId: string,
-  _callback: (candidates: Record<string, unknown>[]) => void,
+  jobId: string,
+  callback: (candidates: Record<string, unknown>[]) => void,
 ): Unsubscribe {
-  return () => {};
+  return subscribeList<Record<string, unknown>[]>(
+    `/get_in_progress?jobId=${jobId}`,
+    callback,
+  );
 }
 
 export function subscribeIssues(
-  _jobId: string,
-  _callback: (candidates: Record<string, unknown>[]) => void,
+  jobId: string,
+  callback: (candidates: Record<string, unknown>[]) => void,
 ): Unsubscribe {
-  return () => {};
+  return subscribeList<Record<string, unknown>[]>(
+    `/get_issues?jobId=${jobId}`,
+    callback,
+  );
 }
 
 export function subscribeEventFeed(
-  _jobId: string,
-  _callback: (events: Record<string, unknown>[]) => void,
+  jobId: string,
+  callback: (events: Record<string, unknown>[]) => void,
 ): Unsubscribe {
-  return () => {};
+  return subscribeList<Record<string, unknown>[]>(
+    `/get_events?jobId=${jobId}`,
+    callback,
+  );
+}
+
+export function subscribeDeepResearch(
+  jobId: string,
+  callback: (data: Record<string, unknown>) => void,
+): Unsubscribe {
+  return subscribeList<Record<string, unknown>>(
+    `/get_deep_research?jobId=${jobId}`,
+    callback,
+  );
 }

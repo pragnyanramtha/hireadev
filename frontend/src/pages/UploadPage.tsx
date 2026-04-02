@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { Folder, FileArchive, Upload, AlertCircle } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
@@ -14,6 +14,7 @@ export default function UploadPage() {
   const [isUploading, setIsUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [file, setFile] = useState<File | null>(null);
+  const submitLockRef = useRef(false);
   const navigate = useNavigate();
   const location = useLocation();
   const state = location.state as { jobTitle?: string; description?: string; keywords?: string } || {};
@@ -51,12 +52,14 @@ export default function UploadPage() {
   };
 
   const handleSubmit = async () => {
+    if (submitLockRef.current || isUploading) return;
     if (!file) return;
     if (!state.jobTitle || !state.description) {
       navigate('/new-job');
       return;
     }
 
+    submitLockRef.current = true;
     setIsUploading(true);
     setError(null);
 
@@ -67,7 +70,7 @@ export default function UploadPage() {
         state.keywords ?? '',
         file,
       );
-      navigate('/analyzing', {
+      navigate(`/analyzing/${jobId}`, {
         state: {
           jobId,
           jobTitle: state.jobTitle,
@@ -76,6 +79,7 @@ export default function UploadPage() {
         },
       });
     } catch (err: unknown) {
+      submitLockRef.current = false;
       setError(err instanceof Error ? err.message : 'Upload failed. Please try again.');
       setIsUploading(false);
     }

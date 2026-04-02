@@ -27,7 +27,7 @@ export default function LandingPage() {
           <a href="#features" className="hover:text-[var(--color-acid)] transition-colors">FEATURES</a>
           <a href="#pricing" className="hover:text-[var(--color-acid)] transition-colors">PRICING</a>
           <a href="#faq" className="hover:text-[var(--color-acid)] transition-colors">FAQ</a>
-          <a href="/new-job" className="brutal-button !py-2 !px-4 text-xs">DASHBOARD</a>
+          <a href="/dashboard" className="brutal-button !py-2 !px-4 text-xs">DASHBOARD</a>
         </div>
       </nav>
 
@@ -49,7 +49,7 @@ export default function LandingPage() {
           </div>
 
           <div className="lg:col-span-3 flex flex-col gap-6 justify-end">
-            <a href="/new-job" className="brutal-button brutal-button-primary group inline-flex items-center justify-between py-5 px-6 w-full text-lg">
+            <a href="/dashboard" className="brutal-button brutal-button-primary group inline-flex items-center justify-between py-5 px-6 w-full text-lg">
               <span>Get Started</span>
               <ArrowRight className="w-6 h-6 group-hover:translate-x-1 transition-transform" />
             </a>
@@ -129,7 +129,7 @@ export default function LandingPage() {
                 <li className="flex items-start gap-3"><Check className="w-5 h-5 opacity-40 shrink-0" /> Basic Spam Filtering</li>
                 <li className="flex items-start gap-3"><Check className="w-5 h-5 opacity-40 shrink-0" /> Llama 8B Coarse scoring (up to 50 CVs)</li>
               </ul>
-              <button onClick={() => navigate('/new-job')} className="brutal-button w-full mt-auto">Get Started</button>
+              <button onClick={() => navigate('/dashboard')} className="brutal-button w-full mt-auto">Get Started</button>
             </div>
 
             {/* Pro Tier - Pops out */}
@@ -215,7 +215,7 @@ export default function LandingPage() {
             <form className="w-full lg:w-1/2 flex flex-col gap-4">
               <input type="email" placeholder="Enter your work email address" className="w-full bg-[#121214] text-[var(--color-acid)] p-5 font-sans text-base border-none focus:outline-none focus:ring-2 focus:ring-[var(--color-acid)] transition-all placeholder:text-slate-500" />
               <textarea placeholder="How can we help you?" rows={4} className="w-full bg-[#121214] text-[var(--color-acid)] p-5 font-sans text-base border-none focus:outline-none focus:ring-2 focus:ring-[var(--color-acid)] transition-all resize-none placeholder:text-slate-500"></textarea>
-              <button type="button" onClick={() => navigate('/new-job')} className="brutal-button brutal-button-primary !p-5 text-center">
+              <button type="button" onClick={() => navigate('/dashboard')} className="brutal-button brutal-button-primary !p-5 text-center">
                 Send Message
               </button>
             </form>

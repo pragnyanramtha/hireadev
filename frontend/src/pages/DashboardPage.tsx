@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useNavigate, useLocation, useParams } from 'react-router-dom';
 import {
   CheckCircle2,
   AlertCircle,
@@ -11,6 +11,9 @@ import {
   FileText,
   Activity,
   Briefcase,
+  Plus,
+  Brain,
+  X,
 } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -23,6 +26,7 @@ import {
   shortlistCandidate,
   retryCandidate,
   getExportUrl,
+  appendResumes,
 } from '../lib/firebase';
 
 function cn(...inputs: ClassValue[]) {
@@ -38,6 +42,7 @@ interface Candidate {
   name?: string;
   status: string;
   score: number | null;
+  shortlisted?: boolean;
   matchBands?: MatchBands;
   flags?: string[];
   rationale?: string;
@@ -62,6 +67,7 @@ interface JobState {
   totalResumes: number;
   counts: Record<string, number>;
   title?: string;
+  keywords?: string;
 }
 
 // ─── Component ───────────────────────────────────────────────────────────────
@@ -69,8 +75,8 @@ interface JobState {
 export default function DashboardPage() {
   const navigate = useNavigate();
   const location = useLocation();
+  const { jobId = '' } = useParams();
   const state = location.state as { jobId?: string; jobTitle?: string; keywords?: string } || {};
-  const jobId = state.jobId;
 
   const [job, setJob] = useState<JobState>({ status: 'loading', totalResumes: 0, counts: {} });
   const [leaderboard, setLeaderboard] = useState<Candidate[]>([]);
@@ -79,6 +85,9 @@ export default function DashboardPage() {
   const [events, setEvents] = useState<PipelineEvent[]>([]);
   const [activeCandidate, setActiveCandidate] = useState<Candidate | null>(null);
   const [activeTab, setActiveTab] = useState<'leaderboard' | 'issues' | 'analytics'>('leaderboard');
+  const [isAppending, setIsAppending] = useState(false);
+  const [actionNotice, setActionNotice] = useState<{ type: 'info' | 'error'; text: string } | null>(null);
+  const addResumeInputRef = useRef<HTMLInputElement | null>(null);
 
   // Unsubscribe refs
   const unsubs = useRef<Array<() => void>>([]);
@@ -104,6 +113,7 @@ export default function DashboardPage() {
   const total = job.totalResumes || 1;
   const terminal = (counts.completed ?? 0) + (counts.skipped ?? 0) + (counts.failed ?? 0);
   const isDone = job.status === 'done';
+  const jobKeywords = (job.keywords || state.keywords || '').split(',').filter(Boolean);
   const avgFit = leaderboard.length > 0
     ? Math.round(leaderboard.reduce((a, c) => a + (c.score ?? 0), 0) / leaderboard.length)
     : 0;
@@ -114,12 +124,39 @@ export default function DashboardPage() {
   const handleShortlist = async (c: Candidate) => {
     if (!jobId) return;
     await shortlistCandidate(jobId, c.candidateId);
-    setActiveCandidate({ ...c });
+    setLeaderboard((prev) => prev.map((candidate) => (
+      candidate.candidateId === c.candidateId ? { ...candidate, shortlisted: true } : candidate
+    )));
+    setActiveCandidate((prev) => prev && prev.candidateId === c.candidateId ? { ...prev, shortlisted: true } : prev);
+    setActionNotice({ type: 'info', text: `${c.name || c.filename} added to shortlist.` });
   };
 
   const handleRetry = async (c: Candidate) => {
     if (!jobId) return;
     await retryCandidate(jobId, c.candidateId);
+    setActionNotice({ type: 'info', text: `Retry queued for ${c.name || c.filename}.` });
+  };
+
+  const handleAppendResumes = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file || !jobId) return;
+
+    if (!file.name.endsWith('.zip')) {
+      setActionNotice({ type: 'error', text: 'Only .zip files are accepted.' });
+      event.target.value = '';
+      return;
+    }
+
+    setIsAppending(true);
+    try {
+      const result = await appendResumes(jobId, file);
+      setActionNotice({ type: 'info', text: `Queued ${result.added} additional resumes for this job.` });
+    } catch (err) {
+      setActionNotice({ type: 'error', text: err instanceof Error ? err.message : 'Failed to append resumes.' });
+    } finally {
+      setIsAppending(false);
+      event.target.value = '';
+    }
   };
 
   // ─── Render ────────────────────────────────────────────────────────────────
@@ -129,8 +166,8 @@ export default function DashboardPage() {
       <div className="min-h-screen bg-[var(--color-bg-dark)] flex items-center justify-center">
         <div className="text-center">
           <p className="text-slate-400 font-mono mb-4">No active job session.</p>
-          <button onClick={() => navigate('/new-job')} className="bg-[var(--color-acid)] text-black px-6 py-3 font-mono font-bold uppercase">
-            Start New Job
+          <button onClick={() => navigate('/dashboard')} className="bg-[var(--color-acid)] text-black px-6 py-3 font-mono font-bold uppercase">
+            View Jobs
           </button>
         </div>
       </div>
@@ -158,6 +195,32 @@ export default function DashboardPage() {
             <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
             <input type="text" placeholder="Search candidates..." className="bg-[#121214] border border-white/10 py-1.5 pl-9 pr-4 text-xs font-mono text-white focus:outline-none focus:border-[var(--color-acid)] rounded-sm w-64" />
           </div>
+          <input
+            ref={addResumeInputRef}
+            type="file"
+            accept=".zip"
+            className="hidden"
+            onChange={handleAppendResumes}
+          />
+          <button
+            type="button"
+            onClick={() => addResumeInputRef.current?.click()}
+            disabled={isAppending}
+            className="flex items-center gap-2 bg-white/5 hover:bg-white/10 text-white px-3 py-1.5 text-xs font-mono font-bold uppercase tracking-widest border border-white/10 transition-colors disabled:opacity-50"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            {isAppending ? 'Adding...' : 'Add Resumes'}
+          </button>
+          {isDone && (
+            <button
+              type="button"
+              onClick={() => navigate(`/research/${jobId}`)}
+              className="flex items-center gap-2 bg-[var(--color-acid)] text-black px-3 py-1.5 text-xs font-mono font-bold uppercase tracking-widest border border-[var(--color-acid)] transition-colors"
+            >
+              <Brain className="w-3.5 h-3.5" />
+              Deep Research
+            </button>
+          )}
           <a
             href={jobId ? getExportUrl(jobId) : '#'}
             className="flex items-center gap-2 bg-white/5 hover:bg-white/10 text-white px-3 py-1.5 text-xs font-mono font-bold uppercase tracking-widest border border-white/10 transition-colors"
@@ -174,8 +237,18 @@ export default function DashboardPage() {
       <section className="shrink-0 bg-[#121214] border-b border-white/5">
         <div className="flex flex-col xl:flex-row xl:items-end justify-between p-4 md:p-6 gap-6">
           <div className="flex flex-col gap-4">
+            {actionNotice && (
+              <div className={cn(
+                'px-4 py-3 border text-sm font-mono max-w-xl',
+                actionNotice.type === 'error'
+                  ? 'bg-[#F97316]/10 border-[#F97316]/30 text-[#FDBA74]'
+                  : 'bg-[var(--color-acid)]/10 border-[var(--color-acid)]/20 text-[var(--color-acid)]',
+              )}>
+                {actionNotice.text}
+              </div>
+            )}
             <div className="flex items-center gap-3">
-              <h2 className="text-2xl md:text-3xl font-bold text-white tracking-tight">{state.jobTitle || 'Job'}</h2>
+              <h2 className="text-2xl md:text-3xl font-bold text-white tracking-tight">{job.title || state.jobTitle || 'Job'}</h2>
               <span className={cn(
                 "px-2 py-0.5 text-[10px] font-mono font-bold uppercase tracking-widest rounded-sm border",
                 isDone
@@ -187,7 +260,7 @@ export default function DashboardPage() {
             </div>
 
             <div className="flex flex-wrap gap-2 text-xs font-mono uppercase tracking-widest text-slate-400">
-              {(state.keywords || '').split(',').filter(Boolean).map((kw: string, i: number) => (
+              {jobKeywords.map((kw: string, i: number) => (
                 <span key={i} className="bg-black/40 border border-white/10 px-2 py-1 rounded-sm">{kw.trim()}</span>
               ))}
               <span className="flex items-center gap-1.5 px-2 py-1 ml-2 text-slate-500">
@@ -312,8 +385,13 @@ export default function DashboardPage() {
                         )}
                       </td>
                       <td className="p-4 hidden sm:table-cell">
-                        <span className="px-2 py-1 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono text-[10px] uppercase tracking-widest font-bold whitespace-nowrap">
-                          {(c.score ?? 0) >= 80 ? 'Shortlist' : 'Reviewed'}
+                        <span className={cn(
+                          'px-2 py-1 border font-mono text-[10px] uppercase tracking-widest font-bold whitespace-nowrap',
+                          c.shortlisted
+                            ? 'bg-[var(--color-acid)]/10 text-[var(--color-acid)] border-[var(--color-acid)]/20'
+                            : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20',
+                        )}>
+                          {c.shortlisted ? 'Shortlisted' : (c.score ?? 0) >= 80 ? 'Ready' : 'Reviewed'}
                         </span>
                       </td>
                       <td className="p-4 hidden lg:table-cell">
@@ -447,7 +525,14 @@ export default function DashboardPage() {
           {activeCandidate ? (
             <div className="flex flex-col h-full overflow-y-auto">
               <div className="p-6 border-b border-white/10 bg-[#121214] relative">
-                <button onClick={() => setActiveCandidate(null)} className="absolute top-4 right-4 lg:hidden text-white/50 hover:text-white p-2 text-xs font-mono uppercase">Close</button>
+                <button
+                  type="button"
+                  onClick={() => setActiveCandidate(null)}
+                  className="absolute top-4 right-4 inline-flex items-center gap-2 border border-white/10 bg-[#0A0A0B] hover:bg-white/5 text-white px-3 py-2 text-[10px] font-mono uppercase tracking-widest"
+                >
+                  <X className="w-3.5 h-3.5" />
+                  Close
+                </button>
                 <div className="flex items-start justify-between mb-4">
                   <div>
                     <h3 className="text-2xl font-bold text-white mb-1">{activeCandidate.name || activeCandidate.filename}</h3>
@@ -463,8 +548,11 @@ export default function DashboardPage() {
                 <div className="flex gap-3">
                   <button
                     onClick={() => handleShortlist(activeCandidate)}
-                    className="flex-1 bg-[var(--color-acid)] text-black font-bold font-mono text-xs uppercase tracking-widest py-3 hover:bg-white transition-colors"
-                  >Shortlist</button>
+                    disabled={activeCandidate.shortlisted}
+                    className="flex-1 bg-[var(--color-acid)] text-black font-bold font-mono text-xs uppercase tracking-widest py-3 hover:bg-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {activeCandidate.shortlisted ? 'Shortlisted' : 'Shortlist'}
+                  </button>
                   {activeCandidate.enrichment?.githubUrl && (
                     <a href={activeCandidate.enrichment.githubUrl} target="_blank" rel="noopener noreferrer" className="px-4 border border-white/20 text-white hover:bg-white/10 transition-colors flex items-center">
                       <ArrowUpRight className="w-4 h-4" />
