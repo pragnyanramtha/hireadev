@@ -3,6 +3,8 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, ArrowUpRight, Brain, RefreshCw } from 'lucide-react';
 import { getDeepResearch, runDeepResearch, subscribeDeepResearch, subscribeJob } from '../lib/firebase';
 
+const GROQ_BILLING_URL = 'https://console.groq.com/settings/billing';
+
 interface MatchBands {
   skill: number;
   experience: number;
@@ -14,6 +16,9 @@ interface Candidate {
   filename: string;
   name?: string;
   score: number | null;
+  researchScore?: number | null;
+  researchSignals?: string[];
+  researchError?: string | null;
   location?: string;
   yearsExp?: number;
   email?: string;
@@ -34,6 +39,9 @@ interface ResearchState {
   summary: string;
   candidates: Candidate[];
   error?: string | null;
+  processedCount?: number;
+  totalCandidates?: number;
+  currentCandidate?: string | null;
 }
 
 interface JobState {
@@ -41,11 +49,48 @@ interface JobState {
   status: string;
 }
 
+function getResearchFailureMessage(error?: string | null): {
+  summary: string;
+  detail?: string;
+  href?: string;
+  cta?: string;
+} {
+  const normalized = (error || '').toLowerCase();
+
+  if (normalized.includes('rate limit') || normalized.includes('429')) {
+    return {
+      summary: 'Need higher rate limits? Get Pro.',
+      detail: 'Deep research hit the current Groq rate limit. Try again shortly or upgrade the account tier.',
+      href: GROQ_BILLING_URL,
+      cta: 'Upgrade',
+    };
+  }
+
+  if (normalized.includes('request entity too large') || normalized.includes('413')) {
+    return {
+      summary: 'Deep research payload was too large.',
+      detail: 'Try again after reducing the candidate set or prompt size.',
+    };
+  }
+
+  return {
+    summary: 'Deep research failed.',
+    detail: error || 'Please try again.',
+  };
+}
+
 export default function DeepResearchPage() {
   const navigate = useNavigate();
   const { jobId = '' } = useParams();
   const [job, setJob] = useState<JobState>({ status: 'loading' });
-  const [research, setResearch] = useState<ResearchState>({ status: 'idle', summary: '', candidates: [] });
+  const [research, setResearch] = useState<ResearchState>({
+    status: 'idle',
+    summary: '',
+    candidates: [],
+    processedCount: 0,
+    totalCandidates: 0,
+    currentCandidate: null,
+  });
   const [launching, setLaunching] = useState(false);
   const autoLaunchRef = useRef(false);
 
@@ -71,7 +116,7 @@ export default function DeepResearchPage() {
     void (async () => {
       const current = await getDeepResearch(jobId);
       const status = current.status as string | undefined;
-      if (!status || status === 'idle' || status === 'failed') {
+      if (!status || status === 'idle') {
         setLaunching(true);
         try {
           await runDeepResearch(jobId);
@@ -91,6 +136,8 @@ export default function DeepResearchPage() {
       setLaunching(false);
     }
   };
+
+  const researchFailure = getResearchFailureMessage(research.error);
 
   return (
     <div className="min-h-screen bg-[var(--color-bg-dark)] text-slate-100 px-6 md:px-10 py-8">
@@ -151,14 +198,36 @@ export default function DeepResearchPage() {
               <div className="border border-[var(--color-acid)]/20 bg-[var(--color-acid)]/5 p-8 text-center">
                 <div className="w-10 h-10 mx-auto mb-4 border-2 border-[var(--color-acid)] border-t-transparent rounded-full animate-spin" />
                 <p className="font-mono text-sm uppercase tracking-widest text-[var(--color-acid)]">
-                  Running web research on top candidates...
+                  {research.currentCandidate
+                    ? `Researching ${research.currentCandidate} (${(research.processedCount ?? 0) + 1}/${research.totalCandidates ?? 0})...`
+                    : 'Running web research on top candidates...'}
                 </p>
               </div>
             )}
 
             {research.status === 'failed' && (
-              <div className="border border-[#F97316]/20 bg-[#F97316]/10 p-6 text-[#FDBA74]">
-                {research.error || 'Deep research failed.'}
+              <div className="border border-[#F97316]/20 bg-[#F97316]/10 p-5 text-[#FDBA74] flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                <div>
+                  <div className="font-mono text-xs uppercase tracking-widest font-bold">
+                    {researchFailure.summary}
+                  </div>
+                  {researchFailure.detail && (
+                    <div className="text-sm mt-2 text-[#FDE6C8]">
+                      {researchFailure.detail}
+                    </div>
+                  )}
+                </div>
+                {researchFailure.href && researchFailure.cta && (
+                  <a
+                    href={researchFailure.href}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-2 px-4 py-2 border border-[#FDBA74]/30 hover:border-[#FDBA74] text-xs font-mono uppercase tracking-widest self-start"
+                  >
+                    {researchFailure.cta}
+                    <ArrowUpRight className="w-4 h-4" />
+                  </a>
+                )}
               </div>
             )}
 
@@ -174,7 +243,7 @@ export default function DeepResearchPage() {
             )}
 
             <section className="grid grid-cols-1 xl:grid-cols-3 gap-5">
-              {research.candidates.map((candidate) => (
+	              {research.candidates.map((candidate) => (
                 <article key={candidate.candidateId} className="border border-white/10 bg-[#121214] p-6 flex flex-col gap-5">
                   <div className="flex items-start justify-between gap-4">
                     <div>
@@ -184,8 +253,15 @@ export default function DeepResearchPage() {
                         {candidate.yearsExp ? ` · ${candidate.yearsExp}y experience` : ''}
                       </p>
                     </div>
-                    <div className="w-14 h-14 rounded-full border border-[var(--color-acid)] text-[var(--color-acid)] font-mono text-xl font-bold flex items-center justify-center">
-                      {candidate.score ?? '—'}
+                    <div className="flex items-center gap-3">
+                      <div className="px-3 py-2 border border-white/10 text-center min-w-[72px]">
+                        <div className="text-[10px] font-mono uppercase tracking-widest text-slate-500">Fit</div>
+                        <div className="text-lg font-mono font-bold text-white">{candidate.score ?? '—'}</div>
+                      </div>
+                      <div className="px-3 py-2 border border-[var(--color-acid)] text-center min-w-[72px] bg-[var(--color-acid)]/5">
+                        <div className="text-[10px] font-mono uppercase tracking-widest text-[var(--color-acid)]">Web</div>
+                        <div className="text-lg font-mono font-bold text-[var(--color-acid)]">{candidate.researchScore ?? '—'}</div>
+                      </div>
                     </div>
                   </div>
 
@@ -199,6 +275,27 @@ export default function DeepResearchPage() {
                         Web Summary
                       </div>
                       <p className="text-sm leading-6 text-slate-300">{candidate.enrichment.summary}</p>
+                    </div>
+                  )}
+
+                  {(candidate.researchSignals?.length ?? 0) > 0 && (
+                    <div>
+                      <div className="font-mono text-[10px] uppercase tracking-widest text-slate-500 mb-3">
+                        Public Signals
+                      </div>
+                      <div className="space-y-2">
+                        {candidate.researchSignals?.map((signal) => (
+                          <div key={signal} className="border-l-2 border-white/20 pl-3 text-xs text-slate-400">
+                            {signal}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {candidate.researchError && (
+                    <div className="text-xs text-[#FDBA74] bg-[#F97316]/10 border border-[#F97316]/20 px-3 py-2">
+                      {candidate.researchError}
                     </div>
                   )}
 

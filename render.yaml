@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: hireadev-backend
+    runtime: docker
+    plan: starter
+    region: ohio
+    rootDir: backend
+    dockerContext: ./backend
+    dockerfilePath: ./backend/Dockerfile
+    autoDeployTrigger: commit
+    healthCheckPath: /healthz
+    buildFilter:
+      paths:
+        - backend/**
+        - render.yaml
+    disk:
+      name: hireadev-state
+      mountPath: /var/data
+      sizeGB: 5
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: DATA_DIR
+        value: /var/data/hireadev
+      - key: GROQ_API_KEY
+        sync: false
+      - key: ALLOWED_ORIGINS
+        sync: false

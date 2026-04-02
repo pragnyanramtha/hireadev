@@ -7,6 +7,7 @@ import base64
 import csv
 import io
 import json
+import os
 import re
 import threading
 import uuid
@@ -16,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -24,17 +25,23 @@ from pipeline.stage1_extract import compute_hash, extract_text_from_file
 from pipeline.stage2_spam import run as run_spam_filter
 from pipeline import stage3_coarse, stage4_deep, stage5_enrich
 from utils.storage import list_resume_files
-from utils.groq_client import chat
 
 load_dotenv()
+
+ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv("ALLOWED_ORIGINS", "*").split(",")
+    if origin.strip()
+]
 
 app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS or ["*"],
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["Content-Disposition"],
 )
 
 
@@ -66,7 +73,7 @@ CANDIDATES: dict[str, list[dict[str, Any]]] = {}
 EVENTS: dict[str, list[dict[str, str]]] = {}
 RESEARCH: dict[str, dict[str, Any]] = {}
 DEFAULT_LOCAL_ZIP = Path(__file__).resolve().parent.parent / "resumes.zip"
-DATA_DIR = Path(__file__).resolve().parent / ".data"
+DATA_DIR = Path(os.getenv("DATA_DIR") or (Path(__file__).resolve().parent / ".data"))
 STATE_FILE = DATA_DIR / "local_state.json"
 COARSE_THRESHOLD = 35
 
@@ -112,6 +119,22 @@ def _load_state() -> None:
     EVENTS = payload.get("events") or {}
     RESEARCH = payload.get("research") or {}
 
+    for job_id, research in RESEARCH.items():
+        research.setdefault("summary", "")
+        research.setdefault("candidates", [])
+        research.setdefault("startedAt", None)
+        research.setdefault("updatedAt", None)
+        research.setdefault("error", None)
+        research.setdefault("processedCount", 0)
+        research.setdefault("totalCandidates", 0)
+        research.setdefault("currentCandidate", None)
+
+        if research.get("status") == "running":
+            research["status"] = "failed"
+            research["error"] = "Deep research was interrupted. Run it again."
+            research["currentCandidate"] = None
+            research["updatedAt"] = _iso_now()
+
 
 def _empty_counts() -> dict[str, int]:
     return {
@@ -154,6 +177,9 @@ def _public_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
         "yearsExp": candidate.get("yearsExp"),
         "email": candidate.get("email"),
         "enrichment": candidate.get("enrichment"),
+        "researchScore": candidate.get("researchScore"),
+        "researchSignals": candidate.get("researchSignals", []),
+        "researchError": candidate.get("researchError"),
         "skipReason": candidate.get("skipReason"),
         "retryCount": candidate.get("retryCount", 0),
         "shortlisted": candidate.get("shortlisted", False),
@@ -217,6 +243,11 @@ def _candidate_or_404(job_id: str, candidate_id: str) -> dict[str, Any]:
             if candidate["candidateId"] == candidate_id:
                 return candidate
     raise HTTPException(status_code=404, detail="Candidate not found")
+
+
+def _slugify(value: str) -> str:
+    slug = re.sub(r"[^a-zA-Z0-9]+", "-", value).strip("-").lower()
+    return slug or "hireadev"
 
 
 def _extract_name(raw_text: str, filename: str) -> str:
@@ -298,45 +329,106 @@ def _top_completed_candidates(job_id: str, limit: int = 3) -> list[dict[str, Any
     return candidates[:limit]
 
 
-def _build_research_prompt(job: dict[str, Any], candidates: list[dict[str, Any]]) -> str:
-    candidate_blocks = []
-    for index, candidate in enumerate(candidates, start=1):
-        evidence = "\n".join(f"- {item}" for item in candidate.get("evidence") or [])
+def _research_rank(candidate: dict[str, Any]) -> float:
+    fit_score = float(candidate.get("score") or 0)
+    research_score = candidate.get("researchScore")
+    if research_score is None:
+        return fit_score
+    return round((fit_score * 0.45) + (float(research_score) * 0.55), 2)
+
+
+def _candidate_research_context(job: dict[str, Any], candidate: dict[str, Any]) -> str:
+    parts: list[str] = [f"Role: {job['title']}"]
+    if candidate.get("score") is not None:
+        parts.append(f"Initial fit: {candidate['score']}/100")
+    if candidate.get("location"):
+        parts.append(f"Location: {candidate['location']}")
+    if candidate.get("yearsExp") is not None:
+        parts.append(f"Experience: {candidate['yearsExp']} years")
+    if candidate.get("rationale"):
+        parts.append(f"Screening note: {candidate['rationale'][:180]}")
+
+    evidence = candidate.get("evidence") or []
+    if evidence:
+        parts.append(f"Resume signal: {str(evidence[0])[:180]}")
+
+    keywords = job.get("keywords") or ""
+    if keywords:
+        parts.append(f"Keywords: {keywords[:120]}")
+
+    return " | ".join(parts)
+
+
+def _build_research_summary(job: dict[str, Any], candidates: list[dict[str, Any]]) -> str:
+    if not candidates:
+        return ""
+
+    ranked = sorted(
+        candidates,
+        key=lambda item: (-_research_rank(item), item["filename"].lower()),
+    )
+    best = ranked[0]
+    lines = [
+        "## Executive Summary",
+        (
+            f"Deep research completed for {len(ranked)} candidates for the "
+            f"{job['title']} role."
+        ),
+        "",
+        "## Best Overall Candidate",
+        (
+            f"{best.get('name') or best['filename']} leads with a blended research rank of "
+            f"{_research_rank(best):.1f}, backed by a fit score of {best.get('score') or 0}"
+            f" and a web research score of {best.get('researchScore') or 0}."
+        ),
+        "",
+        "## Candidate Breakdown",
+    ]
+
+    for candidate in ranked:
         enrichment = candidate.get("enrichment") or {}
-        candidate_blocks.append(
-            f"""Candidate {index}: {candidate.get('name') or candidate['filename']}
-Current Score: {candidate.get('score')}
-Location: {candidate.get('location')}
-Experience: {candidate.get('yearsExp')}
-Flags: {", ".join(candidate.get('flags') or []) or "None"}
-Rationale: {candidate.get('rationale') or "None"}
-Evidence:
-{evidence or "- None"}
-GitHub: {enrichment.get('githubUrl') or "Unknown"}
-LinkedIn: {enrichment.get('linkedinUrl') or "Unknown"}
-Portfolio: {enrichment.get('portfolioUrl') or "Unknown"}
-Web Summary: {enrichment.get('summary') or "None"}"""
+        lines.append(
+            (
+                f"- {candidate.get('name') or candidate['filename']}: "
+                f"fit {candidate.get('score') or 0}, "
+                f"research {candidate.get('researchScore') or 0}, "
+                f"rank {_research_rank(candidate):.1f}. "
+                f"{enrichment.get('summary') or 'No public research summary available.'}"
+            )
         )
 
-    return f"""You are a principal recruiting strategist producing a final deep-research briefing.
+        signals = candidate.get("researchSignals") or []
+        if signals:
+            lines.append(f"  Signals: {'; '.join(signals)}")
 
-Job Title: {job['title']}
-Keywords: {job['keywords']}
-Job Description:
-{job['description']}
+    return "\n".join(lines)
 
-Candidate Dossiers:
-{'\n\n'.join(candidate_blocks)}
 
-Write a thorough markdown report with these sections:
-1. Executive Summary
-2. Best Overall Candidate
-3. Candidate-by-Candidate Breakdown
-4. Comparative Risks and Gaps
-5. Interview Focus Areas
-6. Final Recommendation
-
-Be concrete. Reference specific technical evidence and web-presence signals. Keep it decision-useful."""
+def _save_research_progress(
+    job_id: str,
+    candidates: list[dict[str, Any]],
+    *,
+    status: str,
+    processed_count: int,
+    total_candidates: int,
+    current_candidate: str | None = None,
+    error: str | None = None,
+) -> None:
+    job = _job_or_404(job_id)
+    with LOCK:
+        existing = RESEARCH.get(job_id) or {}
+        RESEARCH[job_id] = {
+            "status": status,
+            "summary": _build_research_summary(job, candidates),
+            "candidates": [_public_candidate(candidate) for candidate in candidates],
+            "startedAt": existing.get("startedAt"),
+            "updatedAt": _iso_now(),
+            "error": error,
+            "processedCount": processed_count,
+            "totalCandidates": total_candidates,
+            "currentCandidate": current_candidate,
+        }
+        _save_state_locked()
 
 
 def _run_deep_research(job_id: str) -> None:
@@ -346,45 +438,89 @@ def _run_deep_research(job_id: str) -> None:
         if not candidates:
             raise RuntimeError("No completed candidates available for deep research")
 
-        for candidate in candidates:
-            if not candidate.get("enrichment") and candidate.get("name"):
-                _append_event(
-                    job_id,
-                    f"Running web enrichment for {candidate.get('name') or candidate['filename']}.",
-                    "info",
-                )
+        total_candidates = len(candidates)
+        processed_count = 0
+        failures: list[str] = []
+
+        _save_research_progress(
+            job_id,
+            candidates,
+            status="running",
+            processed_count=processed_count,
+            total_candidates=total_candidates,
+            current_candidate=candidates[0].get("name") or candidates[0]["filename"],
+        )
+
+        for index, candidate in enumerate(candidates, start=1):
+            candidate_name = candidate.get("name") or candidate["filename"]
+            _append_event(
+                job_id,
+                f"Researching candidate {index}/{total_candidates}: {candidate_name}.",
+                "info",
+            )
+
+            try:
                 enrichment = stage5_enrich.run(
-                    candidate.get("name") or candidate["filename"],
+                    candidate_name,
+                    job["title"],
+                    _candidate_research_context(job, candidate),
                     candidate.get("email"),
                     candidate.get("location"),
                 )
-                with LOCK:
-                    candidate["enrichment"] = enrichment
-                    _save_state_locked()
+                candidate["enrichment"] = {
+                    "githubUrl": enrichment.get("githubUrl"),
+                    "linkedinUrl": enrichment.get("linkedinUrl"),
+                    "portfolioUrl": enrichment.get("portfolioUrl"),
+                    "summary": enrichment.get("summary") or "",
+                }
+                candidate["researchScore"] = enrichment.get("researchScore")
+                candidate["researchSignals"] = enrichment.get("signals") or []
+                candidate["researchError"] = None
                 _append_event(
                     job_id,
-                    f"Completed web enrichment for {candidate.get('name') or candidate['filename']}.",
+                    (
+                        f"Completed research for {candidate_name}: "
+                        f"web score {candidate.get('researchScore') or 0}."
+                    ),
                     "success",
                 )
+            except Exception as candidate_exc:
+                candidate["researchError"] = str(candidate_exc)
+                candidate["researchScore"] = None
+                candidate["researchSignals"] = []
+                if not candidate.get("enrichment"):
+                    candidate["enrichment"] = {
+                        "githubUrl": None,
+                        "linkedinUrl": None,
+                        "portfolioUrl": None,
+                        "summary": "",
+                    }
+                failures.append(f"{candidate_name}: {candidate_exc}")
+                _append_event(
+                    job_id,
+                    f"Research failed for {candidate_name}: {candidate_exc}",
+                    "warn",
+                )
 
-        report = chat(
-            _build_research_prompt(job, candidates),
-            model="compound-beta",
-            max_tokens=1800,
-            temperature=0.2,
-        )
+            processed_count = index
+            next_name = None
+            if index < total_candidates:
+                next_name = candidates[index].get("name") or candidates[index]["filename"]
 
-        with LOCK:
-            RESEARCH[job_id] = {
-                "status": "done",
-                "summary": report,
-                "candidates": [_public_candidate(candidate) for candidate in candidates],
-                "startedAt": (RESEARCH.get(job_id) or {}).get("startedAt"),
-                "updatedAt": _iso_now(),
-                "error": None,
-            }
-            _save_state_locked()
-        _append_event(job_id, "Deep research report complete.", "success")
+            _save_research_progress(
+                job_id,
+                candidates,
+                status="running" if index < total_candidates else "done",
+                processed_count=processed_count,
+                total_candidates=total_candidates,
+                current_candidate=next_name,
+                error="; ".join(failures) if failures else None,
+            )
+
+        if processed_count == 0 or all(candidate.get("researchScore") is None for candidate in candidates):
+            raise RuntimeError("; ".join(failures) if failures else "Deep research could not score any candidates")
+
+        _append_event(job_id, "Deep research completed candidate by candidate.", "success")
     except Exception as exc:
         with LOCK:
             RESEARCH[job_id] = {
@@ -394,6 +530,9 @@ def _run_deep_research(job_id: str) -> None:
                 "startedAt": (RESEARCH.get(job_id) or {}).get("startedAt"),
                 "updatedAt": _iso_now(),
                 "error": str(exc),
+                "processedCount": 0,
+                "totalCandidates": 0,
+                "currentCandidate": None,
             }
             _save_state_locked()
         _append_event(job_id, f"Deep research failed: {exc}", "warn")
@@ -648,6 +787,9 @@ def create_job(payload: CreateJobRequest):
             "startedAt": None,
             "updatedAt": _iso_now(),
             "error": None,
+            "processedCount": 0,
+            "totalCandidates": 0,
+            "currentCandidate": None,
         }
         _save_state_locked()
 
@@ -758,6 +900,19 @@ def get_deep_research(jobId: str):
             "startedAt": None,
             "updatedAt": None,
             "error": None,
+            "processedCount": 0,
+            "totalCandidates": 0,
+            "currentCandidate": None,
+        }
+
+
+@app.get("/healthz")
+def healthz():
+    with LOCK:
+        return {
+            "status": "ok",
+            "jobs": len(JOBS),
+            "updatedAt": _iso_now(),
         }
 
 
@@ -777,6 +932,9 @@ def run_deep_research(data: JobActionRequest):
             "startedAt": _iso_now(),
             "updatedAt": _iso_now(),
             "error": None,
+            "processedCount": 0,
+            "totalCandidates": existing.get("totalCandidates", 0),
+            "currentCandidate": None,
         }
         _save_state_locked()
 
@@ -820,7 +978,7 @@ def retry_candidate(data: CandidateActionRequest):
 
 @app.get("/export_shortlist")
 def export_shortlist(jobId: str):
-    _job_or_404(jobId)
+    job = _job_or_404(jobId)
 
     with LOCK:
         shortlist = [
@@ -845,18 +1003,52 @@ def export_shortlist(jobId: str):
 
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["Rank", "Name", "Email", "Score"])
+    writer.writerow([
+        "Rank",
+        "Name",
+        "Filename",
+        "Email",
+        "Location",
+        "Years Experience",
+        "Score",
+        "Shortlisted",
+        "Flags",
+        "Rationale",
+        "Evidence",
+        "GitHub",
+        "LinkedIn",
+        "Portfolio",
+    ])
     for index, candidate in enumerate(shortlist, start=1):
+        enrichment = candidate.get("enrichment") or {}
         writer.writerow(
             [
                 index,
                 candidate.get("name") or candidate["filename"],
+                candidate["filename"],
                 candidate.get("email") or "",
+                candidate.get("location") or "",
+                candidate.get("yearsExp") or "",
                 candidate.get("score") or "",
+                "yes" if candidate.get("shortlisted") else "no",
+                "; ".join(candidate.get("flags") or []),
+                candidate.get("rationale") or "",
+                " | ".join(candidate.get("evidence") or []),
+                enrichment.get("githubUrl") or "",
+                enrichment.get("linkedinUrl") or "",
+                enrichment.get("portfolioUrl") or "",
             ]
         )
 
-    return output.getvalue()
+    filename = f"{_slugify(job['title'])}-shortlist.csv"
+    return Response(
+        content=output.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-store",
+        },
+    )
 
 
 if __name__ == "__main__":

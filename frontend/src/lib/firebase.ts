@@ -121,8 +121,34 @@ export async function retryCandidate(jobId: string, candidateId: string): Promis
   await callApi('/retry_candidate', 'POST', { jobId, candidateId });
 }
 
-export function getExportUrl(jobId: string): string {
-  return `${API_BASE}/export_shortlist?jobId=${jobId}`;
+export async function downloadShortlistCsv(jobId: string): Promise<string> {
+  const res = await fetch(`${API_BASE}/export_shortlist?jobId=${encodeURIComponent(jobId)}`);
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(
+      (err as Record<string, unknown>).error as string
+      || (err as Record<string, unknown>).detail as string
+      || `HTTP ${res.status}`,
+    );
+  }
+
+  const blob = await res.blob();
+  const disposition = res.headers.get('content-disposition') || '';
+  const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+  const basicMatch = disposition.match(/filename="?([^"]+)"?/i);
+  const filename = decodeURIComponent(utf8Match?.[1] || basicMatch?.[1] || `shortlist-${jobId}.csv`);
+
+  const objectUrl = window.URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = objectUrl;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => window.URL.revokeObjectURL(objectUrl), 1000);
+
+  return filename;
 }
 
 // ── Real-time Appwrite listeners ────────────────────────────────────────────

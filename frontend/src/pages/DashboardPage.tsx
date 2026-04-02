@@ -25,12 +25,77 @@ import {
   subscribeEventFeed,
   shortlistCandidate,
   retryCandidate,
-  getExportUrl,
+  downloadShortlistCsv,
   appendResumes,
 } from '../lib/firebase';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
+}
+
+function toTitleCase(value: string): string {
+  return value
+    .split(/[_\s]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function formatStageLabel(status: string): string {
+  const labels: Record<string, string> = {
+    skipped: 'Initial Screening',
+    failed: 'Processing',
+    coarse_scoring: 'Initial Screening',
+    deep_scoring: 'Deep Review',
+  };
+
+  return labels[status] || toTitleCase(status);
+}
+
+function formatSkipReason(reason?: string): string {
+  if (!reason) {
+    return 'Reason unavailable.';
+  }
+
+  if (reason.startsWith('coarse_below_threshold:')) {
+    const rawScore = Number(reason.split(':')[1]);
+    return Number.isFinite(rawScore)
+      ? `Did not move past the initial screening round (${rawScore}/100).`
+      : 'Did not move past the initial screening round.';
+  }
+
+  const labels: Record<string, string> = {
+    duplicate_resume: 'A duplicate resume was detected.',
+    domain_mismatch: 'The resume did not match the role closely enough.',
+    empty_text: 'Not enough readable text could be extracted from the resume.',
+    foreign_language: 'The resume appears to be in an unsupported language.',
+  };
+
+  return labels[reason] || `${toTitleCase(reason)}.`;
+}
+
+function matchesCandidateSearch(candidate: Candidate, query: string): boolean {
+  const normalized = query.trim().toLowerCase();
+  if (!normalized) {
+    return true;
+  }
+
+  const haystack = [
+    candidate.name,
+    candidate.filename,
+    candidate.email,
+    candidate.location,
+    candidate.status,
+    candidate.rationale,
+    candidate.skipReason,
+    ...(candidate.flags || []),
+    ...(candidate.evidence || []),
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
+  return haystack.includes(normalized);
 }
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -86,6 +151,8 @@ export default function DashboardPage() {
   const [activeCandidate, setActiveCandidate] = useState<Candidate | null>(null);
   const [activeTab, setActiveTab] = useState<'leaderboard' | 'issues' | 'analytics'>('leaderboard');
   const [isAppending, setIsAppending] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
   const [actionNotice, setActionNotice] = useState<{ type: 'info' | 'error'; text: string } | null>(null);
   const addResumeInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -118,6 +185,9 @@ export default function DashboardPage() {
     ? Math.round(leaderboard.reduce((a, c) => a + (c.score ?? 0), 0) / leaderboard.length)
     : 0;
   const shortlistReady = leaderboard.filter((c) => (c.score ?? 0) >= 80).length;
+  const filteredLeaderboard = leaderboard.filter((candidate) => matchesCandidateSearch(candidate, searchQuery));
+  const filteredInProgress = inProgress.filter((candidate) => matchesCandidateSearch(candidate, searchQuery));
+  const filteredIssues = issues.filter((candidate) => matchesCandidateSearch(candidate, searchQuery));
 
   // ─── Handlers ──────────────────────────────────────────────────────────────
 
@@ -159,6 +229,20 @@ export default function DashboardPage() {
     }
   };
 
+  const handleExportShortlist = async () => {
+    if (!jobId) return;
+
+    setIsExporting(true);
+    try {
+      const filename = await downloadShortlistCsv(jobId);
+      setActionNotice({ type: 'info', text: `Downloaded ${filename}.` });
+    } catch (err) {
+      setActionNotice({ type: 'error', text: err instanceof Error ? err.message : 'Failed to export shortlist.' });
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
   // ─── Render ────────────────────────────────────────────────────────────────
 
   if (!jobId) {
@@ -193,7 +277,13 @@ export default function DashboardPage() {
         <div className="flex items-center gap-4">
           <div className="relative hidden lg:block">
             <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
-            <input type="text" placeholder="Search candidates..." className="bg-[#121214] border border-white/10 py-1.5 pl-9 pr-4 text-xs font-mono text-white focus:outline-none focus:border-[var(--color-acid)] rounded-sm w-64" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder="Search candidates..."
+              className="bg-[#121214] border border-white/10 py-1.5 pl-9 pr-4 text-xs font-mono text-white focus:outline-none focus:border-[var(--color-acid)] rounded-sm w-64"
+            />
           </div>
           <input
             ref={addResumeInputRef}
@@ -221,12 +311,14 @@ export default function DashboardPage() {
               Deep Research
             </button>
           )}
-          <a
-            href={jobId ? getExportUrl(jobId) : '#'}
-            className="flex items-center gap-2 bg-white/5 hover:bg-white/10 text-white px-3 py-1.5 text-xs font-mono font-bold uppercase tracking-widest border border-white/10 transition-colors"
+          <button
+            type="button"
+            onClick={handleExportShortlist}
+            disabled={isExporting}
+            className="flex items-center gap-2 bg-white/5 hover:bg-white/10 text-white px-3 py-1.5 text-xs font-mono font-bold uppercase tracking-widest border border-white/10 transition-colors disabled:opacity-50"
           >
-            <Download className="w-3.5 h-3.5" /> Export Shortlist
-          </a>
+            <Download className="w-3.5 h-3.5" /> {isExporting ? 'Exporting...' : 'Export Shortlist'}
+          </button>
           <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-[var(--color-acid)] to-emerald-700 flex items-center justify-center border border-white/20">
             <UserCircle className="w-5 h-5 text-black" />
           </div>
@@ -345,7 +437,7 @@ export default function DashboardPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/5">
-                {leaderboard.map((c, i) => {
+                {filteredLeaderboard.map((c, i) => {
                   const isTop3 = i < 3;
                   const isActive = activeCandidate?.candidateId === c.candidateId;
                   return (
@@ -412,7 +504,7 @@ export default function DashboardPage() {
                 })}
 
                 {/* In-progress ghost rows */}
-                {inProgress.map((c) => (
+                {filteredInProgress.map((c) => (
                   <tr key={c.candidateId} className="opacity-40">
                     <td className="p-4 text-center"><span className="text-xs font-mono">—</span></td>
                     <td className="p-4"><div className="text-sm font-mono text-slate-400">{c.filename}</div></td>
@@ -425,6 +517,13 @@ export default function DashboardPage() {
                     <td className="p-4" />
                   </tr>
                 ))}
+                {filteredLeaderboard.length === 0 && filteredInProgress.length === 0 && (
+                  <tr>
+                    <td colSpan={7} className="p-10 text-center text-slate-500 font-mono text-xs uppercase tracking-widest">
+                      {searchQuery ? 'No candidates match your search.' : 'No candidates yet.'}
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
@@ -433,17 +532,19 @@ export default function DashboardPage() {
         {/* Issues tab */}
         {activeTab === 'issues' && (
           <div className="flex-1 overflow-auto p-6">
-            <h3 className="text-xl font-bold mb-6 text-white">Analysis Issues ({issues.length})</h3>
-            {issues.length === 0 ? (
-              <div className="p-12 text-center border border-dashed border-white/10 font-mono text-sm text-slate-500 uppercase tracking-widest">No issues detected.</div>
+            <h3 className="text-xl font-bold mb-6 text-white">Analysis Issues ({filteredIssues.length})</h3>
+            {filteredIssues.length === 0 ? (
+              <div className="p-12 text-center border border-dashed border-white/10 font-mono text-sm text-slate-500 uppercase tracking-widest">
+                {searchQuery ? 'No issues match your search.' : 'No issues detected.'}
+              </div>
             ) : (
               <div className="space-y-3">
-                {issues.map((c) => (
+                {filteredIssues.map((c) => (
                   <div key={c.candidateId} className="bg-[#121214] border border-[#F97316]/30 p-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
                     <div>
                       <div className="text-[#FDBA74] font-bold text-sm mb-1">{c.filename}</div>
                       <div className="text-slate-400 text-xs font-mono">
-                        Stage: {c.status} · {c.skipReason ?? 'Unknown reason'} · Retries: {c.retryCount ?? 0}/3
+                        Stage: {formatStageLabel(c.status)} · {formatSkipReason(c.skipReason)} · Retries: {c.retryCount ?? 0}/3
                       </div>
                     </div>
                     <div className="flex items-center gap-3">
