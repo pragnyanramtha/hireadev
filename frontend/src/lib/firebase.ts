@@ -3,8 +3,12 @@
  * Uses simple REST API (works with local server or any backend)
  */
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000';
+const API_BASE = import.meta.env.VITE_API_BASE_URL || (import.meta.env.DEV ? 'http://localhost:5000' : '');
 const POLL_INTERVAL_MS = 1000;
+
+if (!API_BASE) {
+  throw new Error('VITE_API_BASE_URL is required for production builds.');
+}
 
 // ── REST helpers ─────────────────────────────────────────────────────────────
 
