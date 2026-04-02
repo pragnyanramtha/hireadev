@@ -12,11 +12,26 @@ if (!API_BASE) {
 
 // ── REST helpers ─────────────────────────────────────────────────────────────
 
+function getRequestHeaders(hasBody: boolean = false): Record<string, string> {
+  const headers: Record<string, string> = {};
+
+  if (API_BASE.includes('ngrok')) {
+    headers['ngrok-skip-browser-warning'] = 'true';
+  }
+
+  if (hasBody) {
+    headers['Content-Type'] = 'application/json';
+  }
+
+  return headers;
+}
+
 async function callApi(endpoint: string, method: string = 'GET', body?: unknown) {
+  const hasBody = body !== undefined;
   const res = await fetch(`${API_BASE}${endpoint}`, {
     method,
-    headers: { 'Content-Type': 'application/json' },
-    body: body ? JSON.stringify(body) : undefined,
+    headers: getRequestHeaders(hasBody),
+    body: hasBody ? JSON.stringify(body) : undefined,
   });
   
   if (!res.ok) {
@@ -126,7 +141,9 @@ export async function retryCandidate(jobId: string, candidateId: string): Promis
 }
 
 export async function downloadShortlistCsv(jobId: string): Promise<string> {
-  const res = await fetch(`${API_BASE}/export_shortlist?jobId=${encodeURIComponent(jobId)}`);
+  const res = await fetch(`${API_BASE}/export_shortlist?jobId=${encodeURIComponent(jobId)}`, {
+    headers: getRequestHeaders(),
+  });
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
