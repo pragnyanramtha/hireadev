@@ -28,17 +28,11 @@ from utils.storage import list_resume_files
 
 load_dotenv()
 
-ALLOWED_ORIGINS = [
-    origin.strip()
-    for origin in os.getenv("ALLOWED_ORIGINS", "*").split(",")
-    if origin.strip()
-]
-
 app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS or ["*"],
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["Content-Disposition"],
