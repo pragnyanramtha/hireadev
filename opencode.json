@@ -1,0 +1,18 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "appwrite": {
+      "type": "local",
+      "command": [
+        "uvx",
+        "mcp-server-appwrite"
+      ],
+      "enabled": true,
+      "environment": {
+        "APPWRITE_PROJECT_ID": "hireadev",
+        "APPWRITE_API_KEY": "standard_2c8f8ce2067ef92f33967d2c61f1752dabf9a96be7a657cb69da085779513406440e57d5ba38398067239804a3b113de4aa63c883d681e9f2062e1ca3d51d2475126bd91103230ac280f104c4fbd47447a68317972538522ea53c21121329b3d71361817a0e491a12a37f496bb14d4e2b076eaa380ca53bcec808ada88464f75",
+        "APPWRITE_ENDPOINT": "https://fra.cloud.appwrite.io/v1"
+      }
+    }
+  }
+}
