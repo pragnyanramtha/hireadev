@@ -27,7 +27,13 @@ export default function LandingPage() {
           <a href="#features" className="hover:text-[var(--color-acid)] transition-colors">FEATURES</a>
           <a href="#pricing" className="hover:text-[var(--color-acid)] transition-colors">PRICING</a>
           <a href="#faq" className="hover:text-[var(--color-acid)] transition-colors">FAQ</a>
-          <a href="/dashboard" className="brutal-button !py-2 !px-4 text-xs">DASHBOARD</a>
+          <button
+            type="button"
+            onClick={() => navigate('/dashboard')}
+            className="brutal-button !py-2 !px-4 text-xs"
+          >
+            DASHBOARD
+          </button>
         </div>
       </nav>
 
@@ -49,10 +55,14 @@ export default function LandingPage() {
           </div>
 
           <div className="lg:col-span-3 flex flex-col gap-6 justify-end">
-            <a href="/dashboard" className="brutal-button brutal-button-primary group inline-flex items-center justify-between py-5 px-6 w-full text-lg">
+            <button
+              type="button"
+              onClick={() => navigate('/dashboard')}
+              className="brutal-button brutal-button-primary group inline-flex items-center justify-between py-5 px-6 w-full text-lg"
+            >
               <span>Get Started</span>
               <ArrowRight className="w-6 h-6 group-hover:translate-x-1 transition-transform" />
-            </a>
+            </button>
             <div className="brutal-card p-6 flex flex-col gap-2 relative overflow-hidden group">
               <div className="absolute top-0 right-0 w-16 h-16 bg-[var(--color-signal)] blur-[50px] opacity-30 group-hover:opacity-60 transition-opacity"></div>
               <Terminal className="w-5 h-5 text-[var(--color-signal)] mb-2" />
