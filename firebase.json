@@ -1,0 +1,20 @@
+{
+  "functions": [
+    {
+      "source": "backend",
+      "codebase": "default",
+      "runtime": "python312",
+      "ignore": [
+        "venv",
+        ".venv",
+        "**/__pycache__/**",
+        ".git",
+        "*.pyc"
+      ]
+    }
+  ],
+  "firestore": {
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  }
+}

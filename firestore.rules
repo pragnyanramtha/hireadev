@@ -1,0 +1,21 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Jobs: read-only for anyone, write only via Admin SDK (Cloud Functions)
+    match /jobs/{jobId} {
+      allow read: if true;
+      allow write: if false;
+
+      match /candidates/{candidateId} {
+        allow read: if true;
+        allow write: if false;
+      }
+
+      match /events/{eventId} {
+        allow read: if true;
+        allow write: if false;
+      }
+    }
+  }
+}
