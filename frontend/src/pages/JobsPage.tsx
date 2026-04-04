@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowRight, Briefcase, Clock3, FolderOpen, Plus } from 'lucide-react';
 import { listJobs } from '../lib/firebase';
+import LoadingWheel from '../components/LoadingWheel';
 
 interface JobListItem {
   jobId: string;
@@ -83,11 +84,7 @@ export default function JobsPage() {
       </header>
 
       <main className="max-w-6xl mx-auto">
-        {loading && (
-          <div className="border border-white/10 bg-[#121214] p-10 text-center font-mono text-sm uppercase tracking-widest text-slate-500">
-            Loading jobs...
-          </div>
-        )}
+        {loading && <LoadingWheel />}
 
         {!loading && error && (
           <div className="border border-[#F97316]/30 bg-[#F97316]/10 p-6 text-[#FDBA74] font-mono text-sm">
